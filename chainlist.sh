@@ -13,6 +13,13 @@ CHAINLIST_URL="https://chainlist.org/rpcs.json"
 CACHE_FILE="/tmp/chainlist_cache.json"
 CACHE_DURATION=3600 # 1 hour in seconds
 
+# Cleanup function for temporary files
+cleanup() {
+    rm -f /tmp/rpc_check_$$_* 2>/dev/null || true
+}
+
+trap cleanup EXIT INT TERM
+
 # Function to fetch and cache data
 fetch_data() {
     if [ -f "$CACHE_FILE" ] && [ -s "$CACHE_FILE" ]; then
@@ -65,11 +72,12 @@ is_number() {
 # Function to check RPC URL
 check_rpc() {
     local rpc_url=$1
-    echo -e "${YELLOW}Checking RPC: $rpc_url${NC}"
+    local index=$2
+    local temp_file="/tmp/rpc_check_$$_$index"
     
     # Skip websocket URLs
     if [[ $rpc_url == wss://* ]] || [[ $rpc_url == ws://* ]]; then
-        echo -e "${BLUE}WebSocket URL (skipping HTTP check)${NC}"
+        echo "SKIP|$rpc_url|WebSocket URL (skipping HTTP check)" > "$temp_file"
         return
     fi
     
@@ -81,13 +89,33 @@ check_rpc() {
     if [ $? -eq 0 ] && [ -n "$response" ]; then
         local chain_id=$(echo "$response" | jq -r '.result // empty' 2>/dev/null)
         if [ -n "$chain_id" ]; then
-            echo -e "${GREEN}✓ Active (Chain ID: $chain_id)${NC}"
+            echo "SUCCESS|$rpc_url|Active (Chain ID: $chain_id)" > "$temp_file"
         else
-            echo -e "${RED}✗ No valid response${NC}"
+            echo "FAIL|$rpc_url|No valid response" > "$temp_file"
         fi
     else
-        echo -e "${RED}✗ Timeout or connection error${NC}"
+        echo "FAIL|$rpc_url|Connection error or Timeout" > "$temp_file"
     fi
+}
+
+# Function to display RPC check results
+display_rpc_result() {
+    local result=$1
+    local status=$(echo "$result" | cut -d'|' -f1)
+    local rpc_url=$(echo "$result" | cut -d'|' -f2)
+    local message=$(echo "$result" | cut -d'|' -f3)
+    
+    case $status in
+        SUCCESS)
+            echo -e "${GREEN}✓${NC} $rpc_url - ${GREEN}$message${NC}"
+            ;;
+        FAIL)
+            echo -e "${RED}✗${NC} $rpc_url - ${RED}$message${NC}"
+            ;;
+        SKIP)
+            echo -e "${BLUE}○${NC} $rpc_url - ${BLUE}$message${NC}"
+            ;;
+    esac
 }
 
 # Function to display chain info
@@ -177,9 +205,45 @@ main() {
         display_chain "$result"
         
         if [ "$check_rpc_flag" = true ]; then
-            echo -e "${YELLOW}Checking RPC endpoints...${NC}\n"
-            echo "$result" | jq -r '.rpc[] | if type == "object" then .url else . end' | while read -r rpc_url; do
-                check_rpc "$rpc_url"
+            echo -e "${YELLOW}Checking RPC endpoints in parallel...${NC}\n"
+            
+            # Get all RPC URLs
+            local rpc_urls=($(echo "$result" | jq -r '.rpc[] | if type == "object" then .url else . end'))
+            local max_parallel=10
+            local index=0
+            local pids=()
+            
+            # Launch parallel checks
+            for rpc_url in "${rpc_urls[@]}"; do
+                check_rpc "$rpc_url" $index &
+                pids+=($!)
+                index=$((index + 1))
+                
+                # Limit concurrent jobs
+                if [ ${#pids[@]} -ge $max_parallel ]; then
+                    wait -n 2>/dev/null || true
+                    # Remove completed PIDs
+                    local new_pids=()
+                    for pid in "${pids[@]}"; do
+                        if kill -0 $pid 2>/dev/null; then
+                            new_pids+=($pid)
+                        fi
+                    done
+                    pids=("${new_pids[@]}")
+                fi
+            done
+            
+            # Wait for all remaining jobs
+            wait
+            
+            # Display results in order
+            echo ""
+            for i in $(seq 0 $((index - 1))); do
+                local temp_file="/tmp/rpc_check_$$_$i"
+                if [ -f "$temp_file" ]; then
+                    display_rpc_result "$(cat "$temp_file")"
+                    rm -f "$temp_file"
+                fi
             done
         fi
     else
