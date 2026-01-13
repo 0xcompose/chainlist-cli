@@ -19,20 +19,20 @@ check:
 	@echo "✓ jq is installed"
 	@command -v curl >/dev/null 2>&1 || { echo "❌ curl is not installed. Run: brew install curl"; exit 1; }
 	@echo "✓ curl is installed"
-	@test -f "$(SCRIPT_PATH)" || { echo "❌ token.sh not found"; exit 1; }
-	@echo "✓ token.sh found"
+	@test -f "$(SCRIPT_PATH)" || { echo "❌ chainlist.sh not found"; exit 1; }
+	@echo "✓ chainlist.sh found"
 	@echo "✓ All dependencies are satisfied"
 
 install: check
-	@echo "Installing token command..."
+	@echo "Installing chainlist command..."
 	@chmod +x "$(SCRIPT_PATH)"
 	@ln -sf "$(SCRIPT_PATH)" "$(INSTALL_PATH)"
 	@echo "✓ Installed to $(INSTALL_PATH)"
 	@echo ""
-	@echo "You can now use: token 1 USDC"
+	@echo "You can now use: chainlist 42161"
 
 uninstall:
-	@echo "Uninstalling token command..."
+	@echo "Uninstalling chainlist command..."
 	@rm -f "$(INSTALL_PATH)"
 	@echo "✓ Removed $(INSTALL_PATH)"
 
