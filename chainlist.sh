@@ -158,20 +158,40 @@ display_chain() {
 # Main script
 main() {
     if [ $# -eq 0 ]; then
-        echo "Usage: chainlist <chain-name|chain-id> [--check-rpc]"
+        echo "Usage: chainlist <chain-name|chain-id> [--check-rpc] [--include-testnets]"
         echo ""
         echo "Examples:"
         echo "  chainlist arbitrum"
         echo "  chainlist 56"
         echo "  chainlist ethereum --check-rpc"
+        echo "  chainlist arbitrum --include-testnets"
         exit 1
     fi
     
-    local query=$1
+    local query=""
     local check_rpc_flag=false
+    local include_testnets=false
     
-    if [ "$2" == "--check-rpc" ]; then
-        check_rpc_flag=true
+    # Parse arguments: first non-flag is query, flags can be in any order
+    for arg in "$@"; do
+        case "$arg" in
+            --check-rpc)
+                check_rpc_flag=true
+                ;;
+            --include-testnets)
+                include_testnets=true
+                ;;
+            *)
+                if [ -z "$query" ]; then
+                    query="$arg"
+                fi
+                ;;
+        esac
+    done
+
+    if [ -z "$query" ]; then
+        echo -e "${RED}Error: missing search query (chain name or chain ID)${NC}"
+        exit 1
     fi
     
     # Check if jq is installed
@@ -189,8 +209,18 @@ main() {
     if is_number "$query"; then
         result=$(echo "$data" | jq ".[] | select(.chainId == $query)")
     else
-        # Case-insensitive search by name
-        result=$(echo "$data" | jq --arg query "$query" '.[] | select(.name | ascii_downcase | contains($query | ascii_downcase))')
+        # Case-insensitive search by name, optionally excluding testnets by common keywords
+        if [ "$include_testnets" = true ]; then
+            result=$(echo "$data" | jq --arg query "$query" '
+                .[] | select(.name | ascii_downcase | contains($query | ascii_downcase))
+            ')
+        else
+            result=$(echo "$data" | jq --arg query "$query" '
+                .[]
+                | select(.name | ascii_downcase | contains($query | ascii_downcase))
+                | select(.name | test("(?i)(testnet|sepolia|goerli|devnet)") | not)
+            ')
+        fi
     fi
     
     if [ -z "$result" ]; then
